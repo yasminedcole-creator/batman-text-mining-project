@@ -1,0 +1,289 @@
+---
+title: "R Notebook"
+output:
+  word_document: default
+  html_notebook: default
+---
+
+### Reads the scripts
+
+```{r}
+library(pdftools)
+library(pdftools)
+library(dplyr)
+library(stringr)
+library(tibble)
+library(purrr)
+# Read the PDF
+pdf_path_3 <- "C:/Users/hodge/Downloads/the-dark-knight-rises-2012.pdf"
+pdf_path_2 <- "C:/Users/hodge/Downloads/the-dark-knight-2008.pdf"
+pdf_path_1 <- "C:/Users/hodge/Downloads/batman-begins-2005.pdf"
+pages_3 <- pdftools::pdf_text(pdf_path_3)
+pages_2 <- pdftools::pdf_text(pdf_path_2)
+pages_1 <- pdftools::pdf_text(pdf_path_1)
+# Display first few line
+```
+
+**This function turns our raw text data into a tibble where each row is a line in the script It also removes the all blank lines present throughout the script, it returns a tibble. It returns an individual tibble for each film**
+
+```{r}
+lines_2 <- imap_dfr(pages_2, ~tibble(
+  page = .y,
+  raw_line = strsplit(.x, "\n", fixed = TRUE)[[1]]
+)) %>%
+  mutate(
+    line = raw_line %>%
+      str_replace_all("\u00A0", " ") %>%
+      str_replace_all("[[:space:]]+", " ") %>%
+      str_replace_all("[–—]", "-") %>%
+      str_trim()
+  ) %>%
+  filter(line != "")
+
+lines_1 <- map2_dfr(pages_1, seq_along(pages_1), function(txt, pg) {
+  tibble(
+    page = pg,
+    raw_line = strsplit(txt, "\n", fixed = TRUE)[[1]]
+  )
+}) %>%
+  mutate(
+    line = raw_line |>
+      str_replace_all("\u00A0", " ") |>
+      str_replace_all("[[:space:]]+", " ") |>
+      str_replace_all("[–—]", "-") |>
+      str_trim()
+  ) %>%
+  filter(line != "")  
+
+
+lines_3 <- map2_dfr(pages_3, seq_along(pages_3), function(txt, pg) {
+  tibble(
+    page = pg,
+    raw_line = strsplit(txt, "\n", fixed = TRUE)[[1]]
+  )
+}) %>%
+  mutate(
+    line = raw_line |>
+      str_replace_all("\u00A0", " ") |>
+      str_replace_all("[[:space:]]+", " ") |>
+      str_replace_all("[–—]", "-") |>
+      str_trim()
+  ) %>%
+  filter(line != "")  
+lines_1 %>% slice_head(n = 20)
+```
+
+**Using the regex identifiers of a new scene in the script, this function identifies each line that starts a new scene and gives every line a scene_id based on that. This schema works for the second two movies but the first ones script is organized a little different**
+
+```{r}
+scene_starters <- paste0(
+  "^\\s*(?:",
+  "INT\\.?|EXT\\.?|INT/EXT\\.?|I/E\\.?|EST\\.?",
+  ")\\s+",
+  "([A-Z0-9 .,'/()#:&-]+?)",
+  "\\s*(?:-|–|—)?\\s*"
+)
+
+lines_2 <- lines_2 %>%
+  mutate(
+    is_scene_heading = str_detect(line, scene_starters),
+    scene_id = cumsum(is_scene_heading)
+  ) %>%
+  filter(line != "")
+lines_2 %>% filter(is_scene_heading) %>% select(page, scene_id, line) %>% slice_head(n = 20)
+
+lines_3 <- lines_3 %>%
+  mutate(
+    is_scene_heading = str_detect(line, scene_starters),
+    scene_id = cumsum(is_scene_heading)
+  ) %>%
+  filter(line != "")
+lines_3 %>% filter(is_scene_heading) %>% select(page, scene_id, line) %>% slice_head(n = 20)
+```
+
+**This works to identify new scenes for the new first movies based on unidented numbers**
+
+```{r}
+scene_number_starters <- "^\\d{1,4}(?:[.):-])?(?:\\s|$)"
+
+lines_1 <- lines_1 %>%
+  mutate(
+    is_scene_heading = str_detect(line, scene_number_starters),
+    scene_id = cumsum(is_scene_heading)
+  ) %>%
+  filter(line != "")
+
+# Preview headings
+lines_1 %>%
+  filter(is_scene_heading) %>%
+  select(page, scene_id, line, raw_line) %>%
+  slice_head(n = 20)
+
+```
+
+-   Now for every line in all our scripts we have a scene_id attached to it in our table. At this point we have three separate tables one for each film. But from here on out the structure of the script is relatively the same so we can concat the tables and run the rest of the code together.
+
+**Used for identifying and understanding indentation pattern of text**
+
+```{r}
+lines_2 %>%
+  mutate(indent = str_extract(raw_line, "^\\s+"),
+         indent_n = nchar(indent)) %>%
+  filter(indent_n > 0) %>%
+  select(indent_n, raw_line) %>%
+  slice_head(n = 20)
+```
+
+**Add a new column for the movie name and then concat our tables on top of each other**
+
+```{r}
+lines2 <- lines_2 %>%
+  mutate(movie = "Dark Knight")
+
+lines_1 <- lines_1 %>%
+  mutate(movie = "Batman Begins")
+
+lines_3 <- lines_3 %>%
+  mutate(movie = "Dark Knight Rises")
+
+lines <- bind_rows(lines_1, lines_2, lines_3)
+
+head(lines)
+```
+
+-   Character names are indented between 20 - 26 while their dialogue is indented between 10-18
+
+**Use knowledge of script indentation scheme to identify dialogue and character lines in the script**
+
+```{r}
+lines_tagged <- lines %>%
+  mutate(
+    indent = str_extract(raw_line, "^\\s+"),
+    indent_n = ifelse(is.na(indent), 0, nchar(indent)),
+    line_type = case_when(
+      indent_n == 0  ~ "scene",
+      indent_n >= 20 & indent_n <= 26 ~ "character",
+      indent_n >= 9 & indent_n <= 16 ~ "dialogue",
+      TRUE           ~ "other"
+    )
+  )
+
+# Preview a section to make sure it's classifying correctly
+lines_tagged %>%
+  select(page, indent_n, line_type, raw_line, movie) %>%
+  slice_head(n = 10)
+```
+
+**Filter out everything except characters and their dialogue**
+
+```{r}
+char_dialogue <- lines_tagged %>%
+  filter(line_type %in% c("character", "dialogue")) %>%
+  select(page, indent_n, line_type, raw_line, scene_id, movie)
+
+
+head(char_dialogue)
+```
+
+-   We now have a table that consists of lines in the scripts where characters are mentioned then their following dialogue or associated dialogue
+
+**Now instead of having character names as part of the raw_line column we seperate them to a new column, now the raw_line column will only contain dialogue data, and there's a new character name column that identifies character that said that piece of dialogue.**
+
+```{r}
+char_dialogue_linked <- char_dialogue %>%
+  mutate(
+    .row_id = row_number(),  # preserve input order
+    character_name = if_else(
+      line_type == "character",
+      str_trim(raw_line),
+      NA_character_
+    )
+  ) %>%
+  arrange(movie, scene_id, .row_id) %>%     # order within movie + scene
+  group_by(movie, scene_id) %>%             # prevent bleed across scenes or movies
+  tidyr::fill(character_name, .direction = "down") %>%
+  ungroup() %>%
+  filter(line_type == "dialogue") %>%
+  select(movie, scene_id, page, character_name, raw_line, indent_n)
+
+
+char_dialogue_linked %>%
+  select(character_name, raw_line, scene_id) %>%
+  slice_head(n = 10)
+```
+
+```{r}
+target_chars <- c("BRUCE", "WAYNE", "BATMAN", "ALFRED", "YOUNG BRUCE")
+
+filtered_dialogue <- char_dialogue_linked %>%
+  filter(character_name %in% target_chars)
+
+filtered_dialogue %>%
+  select(character_name, raw_line, scene_id, movie) %>%
+  slice_head(n = 10)
+```
+
+-   This gives us pre-processed and cleaned data for each of the films next step would be tokenization to begin to analyze sentiment.
+
+```{r}
+library(readr)
+
+write_csv(filtered_dialogue, "output.csv")
+```
+
+```{r}
+library(tidytext)
+filtered_dialogue <- filtered_dialogue %>% unnest_tokens(word, raw_line)
+data("stop_words")
+head(stop_words)
+filtered_dialogue <- filtered_dialogue %>% anti_join(stop_words)
+filtered_dialogue
+```
+
+```{r}
+library(ggplot2)
+target_chars <- c("BRUCE", "WAYNE", "BATMAN", "YOUNG BRUCE")
+
+filtered_dialogue %>% count(word, sort=TRUE) %>%
+  filter(n > 4) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n))+
+  geom_col()+
+  coord_flip()
+```
+
+```{r}
+library(reshape2)
+library(wordcloud)
+library(tidytext)
+library(textdata) 
+
+filtered_dialogue %>%
+  filter(nchar(word) > 2) %>%                              
+  inner_join(get_sentiments("bing"), by = "word",
+             relationship = "many-to-many") %>%            
+  count(word, sentiment, sort = TRUE) %>%                 
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%  
+  comparison.cloud(
+    colors = c("blueviolet", "darkmagenta"),
+    max.words = 100
+  )
+```
+
+```{r}
+head(filtered_dialogue)
+df_plot <- filtered_dialogue %>%
+  mutate(index = row_number())
+
+ggplot(df_plot, aes(x = index, y = sentiment_score, fill = factor(movie))) +
+  geom_col(show.legend = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~ movie, ncol = 3, scales = "free_x",
+             labeller = as_labeller(c(`Batman Begins` = "1", `Dark Knight` = "2", `Dark Knight Rises` = "3"))) +
+  labs(
+    title = "AFINN Sentiment Score per Review",
+    x = "Review Index",
+    y = "Sentiment Score"
+  ) +
+  theme_minimal(base_size = 13)
+```
