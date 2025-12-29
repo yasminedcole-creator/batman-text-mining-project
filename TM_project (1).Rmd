@@ -1,0 +1,124 @@
+---
+title: "TM_d4"
+author: "Brendan hodges"
+date: "2025-12-02"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r cars}
+library(readr)
+my_data <- read_csv("C:/Users/hodge/Downloads/output - Copy.csv")
+head(my_data)
+```
+
+```{r}
+library(dplyr)
+library(tibble)
+
+movie_order <- c("Batman Begins", "Dark Knight", "Dark Knight Rises")
+
+Movies <- my_data %>%
+  mutate(movie = factor(movie, levels = movie_order)) %>%
+  arrange(movie)
+
+Movies <- Movies %>%
+  group_by(movie) %>%
+  mutate(scene_index = dense_rank(scene_id)) %>%
+  ungroup()
+
+head(Movies)
+tail(Movies, 100)
+```
+
+```{r}
+library(tidytext)
+Movies <- Movies %>% unnest_tokens(word, raw_line)
+data("stop_words")
+head(stop_words)
+Movies <- Movies %>% anti_join(stop_words)
+head(Movies)
+```
+
+```{r}
+library(tidyverse)    # covers dplyr, tidyr, tibble, stringr, ggplot2
+library(tidytext)     # for cast_dtm(), tidy(), unnest_tokens()
+library(topicmodels)  # for LDA()
+
+dtm <- Movies %>%
+  count(movie, scene_index, word) %>%
+  unite(doc_id, movie, scene_index, remove = FALSE) %>%   # NEW
+  cast_dtm(doc_id, word, n)
+
+lda_model <- LDA(dtm, k = 3, control = list(seed = 123))
+
+gamma <- tidy(lda_model, matrix = "gamma")
+
+beta <- tidy(lda_model, matrix = "beta")
+
+scene_topics <- gamma %>%
+  separate(document, into = c("movie", "scene_index"), sep = "_") %>%
+  mutate(scene_index = as.integer(scene_index)) %>%
+  group_by(movie, scene_index) %>%
+  slice_max(gamma, n = 1) %>%
+  ungroup()
+
+scene_topics_with_beta <- scene_topics %>%
+  left_join(beta, by = "topic")
+
+head(scene_topics_with_beta)
+```
+
+```{r}
+ggplot(scene_topics, aes(x = scene_index, y = 1, fill = factor(topic))) +
+  geom_tile() +
+  scale_y_continuous(breaks = NULL) +
+  facet_wrap(~ movie, ncol = 1, scales = "free_x") +
+  labs(
+    title = "Dominant Topic Per Scene by Movie",
+    x = "Scene Index",
+    fill = "Topic"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+top_terms <- beta %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 15) %>%
+  ungroup()
+
+top_terms
+```
+
+```{r}
+ggplot(top_terms, aes(x = beta, 
+                      y = reorder_within(term, beta, topic), 
+                      fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free_y") +
+  scale_y_reordered() +
+  labs(
+    title = "Top Terms per Topic",
+    x = "Beta (Word Probability)",
+    y = "Term"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+words_of_interest <- c("fear", "hero", "batman", "joker")
+
+top_topic_for_words <- beta %>%
+  filter(term %in% words_of_interest) %>%
+  group_by(term) %>%
+  slice_max(beta, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+top_topic_for_words
+```
+
+**Explanation/Findings**
+- When we do topic modeling by scene it's clear to see the most dominant topic changes across scenes with certain points in the movie representing certain topics. If we look at our AFINN sentiment by scene graph we can see that in certain cases dips or changes within sentiment score directly compare to changes in topics. For example in the dark knight we see the sentiment score shoot up towards the end of the movie, around the same scene we see a change from topic 2 to 3.For the most part when comparing the two graphs we see a dip in sentiment score around the same times we see high appearances of topic 2 and topic 1. This makes sense when looking at words in those topics as we topic 3 be associated with words like 'hero' and 'love', while the other two mainly associate with batman his villians and the city of gotham.
